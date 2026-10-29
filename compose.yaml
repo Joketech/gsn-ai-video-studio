@@ -1,0 +1,81 @@
+name: gsn-studio
+x-api: &api
+  build: ./services/api
+  environment: &env
+    DATABASE_URL: postgresql+psycopg://gsn:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/gsn
+    REDIS_URL: redis://redis:6379/0
+    AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET in .env}
+    COOKIE_SECURE: 'false'
+    WEB_ORIGIN: http://localhost:3000
+    S3_ENDPOINT: http://minio:9000
+    S3_ACCESS_KEY: ${S3_ACCESS_KEY:-gsnlocal}
+    S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}
+    S3_BUCKET: ${S3_BUCKET:-gsn-assets}
+    RENDER_MODE: ${RENDER_MODE:-mock}
+    HERMES_MODE: ${HERMES_MODE:-mock}
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: gsn
+      POSTGRES_USER: gsn
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes: [postgres:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U gsn -d gsn']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:7-alpine
+    command: [redis-server, --appendonly, 'yes']
+    volumes: [redis:/data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address ':9001'
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-gsnlocal}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}
+    ports: ['127.0.0.1:9001:9001']
+    volumes: [assets:/data]
+  storage-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on: [minio]
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-gsnlocal}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}
+      S3_BUCKET: ${S3_BUCKET:-gsn-assets}
+    entrypoint: [/bin/sh, -c]
+    command:
+      - 'until mc alias set local http://minio:9000 "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY"; do sleep 2; done; mc mb --ignore-existing "local/$$S3_BUCKET"'
+  migrate:
+    <<: *api
+    command: [python, -m, gsn.migrate]
+    depends_on:
+      postgres: {condition: service_healthy}
+  api:
+    <<: *api
+    ports: ['127.0.0.1:8000:8000']
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      storage-init: {condition: service_completed_successfully}
+  worker:
+    <<: *api
+    command: [python, -m, gsn.worker]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      storage-init: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+  web:
+    build: ./apps/web
+    ports: ['127.0.0.1:3000:3000']
+    depends_on: [api]
+volumes:
+  postgres:
+  redis:
+  assets:

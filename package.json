@@ -1,0 +1,11 @@
+{
+  "name": "gsn-ai-video-studio",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "docker compose up --build",
+    "dashboard:dev": "npm --prefix apps/web run dev",
+    "dashboard:build": "npm --prefix apps/web run build",
+    "dashboard:check": "npm --prefix apps/web run typecheck"
+  }
+}
